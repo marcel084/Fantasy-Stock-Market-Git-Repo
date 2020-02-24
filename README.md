@@ -1,4 +1,4 @@
-# Fantasy-Stock-Market-Git-Repo
+# Fantasy Stock Market Git Repository
 Stock Market Project API
 This project is a version of the Fantasy Stock Game. A key generated in alphavantage.co's API is used for checking stock prices and making transactions. The number of price look-ups is limited  with Alpha Vantage, API number of calls are limited and must be made made at the optimum time.
 [Alpha Vantage Documentation](https://www.alphavantage.co/documentation/) (Links to an external site.)
