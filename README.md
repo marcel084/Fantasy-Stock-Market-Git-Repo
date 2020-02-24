@@ -19,7 +19,7 @@ The Model chooses the maximum Profit value (Current pricing-Last Transaction Pri
 The quantities set in every transaction is determined by Max value to spend of $3000.
 The model meet the requirement of buying if there is Budget available and selling if there is more than 1 stock in available the portfolio
 
-### Model Performance
+### Model Performance and Testing 1st Model Time Series  
 This model run for 21 days, with an increasing balance of 0.02% compared to the initial budget. The condition for comparing the current price, before making the transaction, with the Time Series didn't allow to wait, the Forecasting values using Arima were not accurate(rmse of 8 and 14 USD) for Tesla and Amazon stocks test between actual and predicted values. Also, trend in the prediction is constant with no seasonality component forecasted.
 
 ### Recomendation and 2nd model in .Rmd
@@ -41,5 +41,6 @@ This class up/down determined through the following estimated price in Arima for
 `library(randomForest)`
 `library(partykit)`
 `library(rpart.plot)`
+
 
 
