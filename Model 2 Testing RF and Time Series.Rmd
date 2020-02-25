@@ -1,0 +1,469 @@
+---
+title: "Model 2 Testing RPART Trees and Time Series"
+author: "Moises & Marcel"
+date: "February 23, 2020"
+output: html_document
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(tidyverse)
+library(alphavantager)
+library(forecast)
+library(caTools)
+library(rpart)
+library(forecast)
+library(naivebayes)
+library(e1071)
+library(randomForest)
+library(partykit)
+library(rpart.plot)
+library(ggthemes)
+```
+```{r}
+#Getting Data for Microsoft share every 15 min
+av_api_key("#######")
+```
+```{r}
+msft<-av_get(symbol = "MSFT",
+             av_fun = "TIME_SERIES_INTRADAY",
+             interval = "15min",
+             outputsize = "full")
+
+```
+```{r}
+msft<-write.csv(msft,"msft.csv")
+```
+
+```{r}
+#Reading data saved
+msft<-read_csv("msft.csv")
+```
+
+
+```{r}
+#Formating data and estimating average price between opening price and closing price in the frame of time evaluated
+msft$date <- as.Date(msft$timestamp, format = "%D")
+msft$ave <- (msft$high + msft$low) / 2
+```
+```{r}
+#Calculating column difference between current average price and previous one,
+difference <- diff(msft$ave)
+msft <- tail(msft, 779)
+msft$difference <- difference
+```
+```{r}
+#Prediction of the class calculated trough real values of the following observations. In current time this prediction is done by Time Series Analysis but since we have real values for future observations the analysis was done based on reality. At the end of this Analysis predicted class based on real values will be compared to predicted class based on Time Series Analyisis  
+PredMarkt<-ifelse(difference<0,"down","up")
+PredMarkt<-tail(PredMarkt,778)
+msft<-head(msft,778)
+msft$PredMarkt<-PredMarkt
+msft$PredMarkt<-as.factor(msft$PredMarkt)
+```
+
+```{r}
+#Function to normalize the data
+MinMax<-function(x){
+  return((x- min(x)) /(max(x)-min(x)))
+}
+```
+```{r}
+#Normalizing column difference
+msft$normalized<-MinMax(msft$difference)
+```
+```{r}
+#Setting parameters to define buy and selling
+hist(msft$normalized,breaks=20)
+```
+```{r}
+summary(msft$normalized)
+```
+
+```{r}
+#Setting 4 actions based on past and future behavior of the stock using thresholds from summary of the normalized data
+msft$label <-
+  ifelse(
+    msft$normalized > .4398 &
+      msft$PredMarkt == "down",
+    "SellBig",
+    ifelse(
+      msft$normalized < .4398 &
+        msft$normalized > 0.4224 |
+        msft$normalized > .4398 &
+        msft$PredMarkt == "up",
+      "Sell",
+      ifelse(
+        msft$normalized < .4224 &
+          msft$normalized > 0.4034 |
+          msft$normalized < .4034 & msft$PredMarkt == "down",
+        "Buy",
+        "BuyBig"
+      )
+    )
+  )
+
+#Declaring actions as factors
+msft$label<-as.factor(msft$label)
+```
+
+
+```{r}
+#Splitting data into train and test
+sample <- sample.split(msft$timestamp,SplitRatio = .75)
+trainMsft <- subset(msft, sample == TRUE)
+testMsft <- subset(msft, sample == FALSE)
+```
+```{r}
+#Classifying actions based on Naive Bayes and getting accuracy of the model
+naiveMSft <- naiveBayes(label ~ ave + normalized + PredMarkt, data = trainMsft)
+predictNBMsft <- predict(naiveMSft, testMsft, type = "class")
+validationMsft <- data.frame('actual' = testMsft$label, predictNBMsft)
+accuracyNBMsft <- nrow(subset(validationMsft, actual == predictNBMsft)) / nrow(validationMsft)
+cat("Accuracy Naive Bayes Model:", accuracyNBMsft)
+```
+
+```{r}
+#Classifying actions based on Regression and Decision Trees and getting accuracy of the model
+rpartModelMsft <- rpart(label ~ ave + normalized + PredMarkt,
+        data = trainMsft,
+        method = "class")
+predictrpartMsft <- predict(rpartModelMsft, testMsft, type = "class")
+validationrpartMsft <- data.frame('actual' = testMsft$label, predictrpartMsft)
+accuracyrpartMsft <- nrow(subset(validationrpartMsft, actual == predictrpartMsft)) / nrow(validationrpartMsft)
+cat("Accuracy Regression  and Decision Trees Model:",
+    accuracyrpartMsft)
+```
+```{r}
+#Plotting the Model
+plot<-rpart.plot(rpartModelMsft,extra=2,under=TRUE)
+```
+
+```{r}
+#Getting a function for observations and the prediction of the following observation. The frequency of the Time is series is set on 26, that is the quantity of times 15 min interval is repeated in a day. For forecasting only would be taken the following observation in the future.
+trainTS<-function(x){
+  acc <-
+    data.frame(Trial = integer(),
+               Actual = integer(),
+               Pred = integer())
+  for (i in seq(from = 50, to = 310, by = 20)) {
+    vector = head(x, i)
+    tsDataStock <- ts (vector, frequency = 26)
+    arimaStock <- auto.arima(tsDataStock)
+    arimaForecastStock <- forecast(arimaStock, h = 1)
+    prediction <- data.frame(arimaForecastStock)
+    trial <- i
+    attempt <-
+      data.frame(
+        Trial = trial,
+        Actual = tail(vector, 1),
+        Pred = prediction$Point.Forecast
+      )
+    acc <- rbind(acc, attempt)
+  }
+  return(acc)
+}
+```
+
+```{r}
+#Running the function for the column pricing average
+resultsMSFT<-trainTS(msft$ave)
+```
+```{r}
+#Getting a subset for the same rows gotten with the function and comparing the behavior of the market between real values and predicted values with Time Series
+msftTestTS <- msft[c(50, 70, 90, 110, 130, 150, 170, 190, 210, 230, 250, 270, 290, 310), ]
+resultsMSFT$classPred <- ifelse(resultsMSFT$Actual - resultsMSFT$Pred > 0, 'down', 'up')
+resultsMSFT$classPred <- as.factor(resultsMSFT$classPred)
+msftTestTS$PredMarkt <- as.factor(msftTestTS$PredMarkt)
+tableMSFT <- cbind(resultsMSFT, PredMarkt = msftTestTS$PredMarkt)
+```
+```{r}
+#Confusion Matrix Stock Microsoft
+confusionMatrixMSFT<-table(Actual=tableMSFT$PredMarkt,Prediction=tableMSFT$classPred)
+confusionMatrixMSFT
+```
+```{r}
+#Accuracy for predicted class "Market is going up or down" for the stock Microsoft
+accuracyMsft = sum(diag(confusionMatrixMSFT) /  sum (rowSums(confusionMatrixMSFT)))
+cat("Accuracy TS Class MSFT:", accuracyMsft)
+```
+This accuracy is low, approximately in 71% of the times that the model is going to decide if it should buy/sell big or buy/sell safe based on the prediction of the market for the next observation takes the correct decision. Taking in count that there are only 2 possible choices, randomly we have a 50% of chances to take the correct decision, so the prediction of Time Series Model improves the Model in a 21% of accuracy for this dataset
+
+
+```{r}
+#Applying the same analysis for Tesla stock
+tsla<-av_get(symbol = "TSLA",
+             av_fun = "TIME_SERIES_INTRADAY",
+             interval = "15min",
+             outputsize = "full")
+tsla
+```
+```{r}
+tsla<-write.csv(tsla,"tsla.csv")
+```
+
+```{r}
+#Reading data saved
+tsla<-read.csv("tsla.csv")
+```
+```{r}
+#Formating data and estimating average price between opening price and closing price in the frame of time evaluated  
+tsla$date<-as.Date(tsla$timestamp,format="%D")
+tsla$ave<-(tsla$high+tsla$low)/2
+```
+```{r}
+#Calculating column difference between current average price and previous one
+differencetsla<-diff(tsla$ave)
+tsla<-tail(tsla,779)
+tsla$differencetsla<-differencetsla
+```
+```{r}
+#Prediction of the class calculated through real values of the following observations. In current time this prediction is done by Time Series Analysis but since we have real values for future observations the analysis was done based on reality. At the end of this Analysis predicted class based on real values will be compared to predicted class based on Time Series Analyisis  
+PredMarkttsla<-ifelse(difference<0,"down","up")
+PredMarkttsla<-tail(PredMarkttsla,778)
+tsla<-head(tsla,778)
+tsla$PredMarkt<-PredMarkttsla
+tsla$PredMarkt<-as.factor(tsla$PredMarkt)
+```
+
+```{r}
+#Function to normalize the data
+MinMax<-function(x){
+  return((x- min(x)) /(max(x)-min(x)))
+}
+```
+```{r}
+tsla$normalized<-MinMax(tsla$differencetsla)
+```
+```{r}
+#Setting parameters to define buy and selling
+hist(tsla$normalized,breaks=20)
+```
+```{r}
+summary(tsla$normalized)
+```
+
+```{r}
+#Setting 4 actions based on past and future behavior of the stock using thresholds from summary of the normalized data
+tsla$label <-
+  ifelse(
+    tsla$normalized > .5027 &
+      tsla$PredMarkt == "down",
+    "SellBig",
+    ifelse(
+      tsla$normalized < .5027 &
+        tsla$normalized > 0.4962 |
+        tsla$normalized > .5027 &
+        tsla$PredMarkt == "up",
+      "Sell",
+      ifelse(
+        tsla$normalized < .4962 &
+          tsla$normalized > 0.4862 |
+          tsla$normalized < .4862 & tsla$PredMarkt == "down",
+        "Buy",
+        "BuyBig"
+      )
+    )
+  )
+
+#Declaring actions as factors
+tsla$label <- as.factor(tsla$label)
+```
+
+
+```{r}
+#Splitting data into train and test
+sample <- sample.split(tsla$timestamp,SplitRatio = .75)
+trainTsla <- subset(tsla, sample == TRUE)
+testTsla <- subset(tsla, sample == FALSE)
+```
+```{r}
+#Classifying actions based on Naive Bayes and getting accuracy of the model
+naiveTsla <- naiveBayes(label ~ ave + normalized + PredMarkt, data = trainTsla)
+predictNBTsla <- predict(naiveTsla, testTsla, type = "class")
+validationTsla <- data.frame('actual' = testTsla$label, predictNBTsla)
+accuracyNBTsla <- nrow(subset(validationTsla, actual == predictNBTsla)) / nrow(validationTsla)
+cat("Accuracy Naive Bayes Model:", accuracyNBTsla)
+```
+
+```{r}
+#Classifying actions based on Regression and Decision Trees and getting accuracy of the model
+rpartModelTsla <- rpart(label ~ ave + normalized + PredMarkt,
+        data = trainTsla,
+        method = "class")
+predictrpartTsla <- predict(rpartModelTsla, testTsla, type = "class")
+validationrpartTsla <- data.frame('actual' = testTsla$label, predictrpartTsla)
+accuracyrpartTsla <- nrow(subset(validationrpartTsla, actual == predictrpartTsla)) / nrow(validationrpartTsla)
+cat("Accuracy Regression  and Decision Trees Model:",
+    accuracyrpartTsla)
+```
+```{r}
+#Plotting the Model
+plot<-rpart.plot(rpartModelTsla,extra=2,under=TRUE)
+```
+
+```{r}
+#Running the function for the column pricing average
+resultsTSLA<-trainTS(tsla$ave)
+```
+
+```{r}
+#Running the function for the column pricing average
+tslaTestTS<-tsla[c(50,70,90,110,130,150,170,190,210,230,250,270,290,310),]
+resultsTSLA$classPred<-ifelse(resultsTSLA$Actual-resultsTSLA$Pred>0,'down','up')
+resultsTSLA$classPred<-as.factor(resultsTSLA$classPred)
+tslaTestTS$PredMarkt<-as.factor(tslaTestTS$PredMarkt)
+tableTSLA<-cbind(resultsTSLA,PredMarkt=tslaTestTS$PredMarkt)
+```
+```{r}
+#Confusion Matrix Stock Tesla
+confusionMatrixTSLA<-table(Actual=tableTSLA$PredMarkt,Prediction=tableTSLA$classPred)
+confusionMatrixTSLA
+```
+```{r}
+#Accuracy for predicted class "Market is going up or down" for the stock Microsoft
+accuracyTsla = sum(diag(confusionMatrixTSLA) /  sum (rowSums(confusionMatrixTSLA)))
+cat("Accuracy TS Class TESLA:", accuracyTsla)
+```
+
+This accuracy is low, approximately in 64% of the times that the model is going to decide if it should buy/sell big or buy/sell safe based on the prediction of the market for the next observation takes the correct decision. Taking in count that there are only 2 possible choices, randomly we have a 50% of chances to take the correct decision, so the prediction of Time Series Model only improves the Model in a 14% of accuracy
+
+```{r}
+#Applying the same analysis for Aple stock
+aapl<-av_get(symbol = "AAPL",
+             av_fun = "TIME_SERIES_INTRADAY",
+             interval = "15min",
+             outputsize = "full")
+aapl
+```
+```{r}
+aapl<-write.csv(aapl,"aapl.csv")
+```
+
+```{r}
+#Reading data saved
+aapl<-read.csv("aapl.csv")
+```
+```{r}
+#Formating data and estimating average price between opening price and closing price in the frame of time evaluated  
+aapl$date<-as.Date(aapl$timestamp,format="%D")
+aapl$ave<-(aapl$high+aapl$low)/2
+```
+```{r}
+#Calculating column difference between current average price and previous one
+differenceAapl<-diff(aapl$ave)
+aapl<-tail(aapl,779)
+aapl$differenceAapl<-differenceAapl
+```
+```{r}
+#Prediction of the class calculated trough real values of the following observations. In current time this prediction is done by Time Series Analysis but since we have real values for future observations the analysis was done based on reality. At the end of this Analysis predicted class based on real values will be compared to predicted class based on Time Series Analyisis
+PredMarktaapl <- ifelse(difference < 0, "down", "up")
+PredMarktaapl <- tail(PredMarktaapl, 778)
+aapl <- head(aapl, 778)
+aapl$PredMarkt <- PredMarktaapl
+aapl$PredMarkt <- as.factor(aapl$PredMarkt)
+```
+
+```{r}
+#Function to normalize the data
+MinMax<-function(x){
+  return((x- min(x)) /(max(x)-min(x)))
+}
+```
+```{r}
+aapl$normalized<-MinMax(aapl$differenceAapl)
+```
+```{r}
+#Setting parameters to define buy and selling
+hist(aapl$normalized,breaks=20)
+```
+```{r}
+summary(aapl$normalized)
+```
+
+```{r}
+#Setting 4 actions based on past and future behavior of the stock using thresholds from summary of the normalized data
+aapl$label <-
+  ifelse(
+    aapl$normalized > .5271 &
+      aapl$PredMarkt == "down",
+    "SellBig",
+    ifelse(
+      aapl$normalized < .5271 &
+        aapl$normalized > 0.5077 |
+        aapl$normalized > .5271 &
+        aapl$PredMarkt == "up",
+      "Sell",
+      ifelse(
+        aapl$normalized < .5077 &
+          aapl$normalized > 0.4898 |
+          aapl$normalized < .4898 & aapl$PredMarkt == "down",
+        "Buy",
+        "BuyBig"
+      )
+    )
+  )
+
+#Declaring actions as factors
+aapl$label <- as.factor(aapl$label)
+```
+
+
+```{r}
+#Splitting data into train and test
+sample <- sample.split(aapl$timestamp,SplitRatio = .75)
+trainaapl <- subset(aapl, sample == TRUE)
+testaapl <- subset(aapl, sample == FALSE)
+```
+```{r}
+#Classifying actions based on Naive Bayes and getting accuracy of the model
+naiveaapl <- naiveBayes(label ~ ave + normalized + PredMarkt, data = trainaapl)
+predictNBaapl <- predict(naiveaapl, testaapl, type = "class")
+validationaapl <- data.frame('actual' = testaapl$label, predictNBaapl)
+accuracyNBaapl <- nrow(subset(validationaapl, actual == predictNBaapl)) / nrow(validationaapl)
+cat("Accuracy Naive Bayes Model:", accuracyNBaapl)
+```
+
+```{r}
+#Classifying actions based on Regression and Decision Trees and getting accuracy of the model
+rpartModelAapl <- rpart(label ~ ave + normalized + PredMarkt,
+        data = trainaapl,
+        method = "class")
+predictrpartAapl <- predict(rpartModelaapl, testaapl, type = "class")
+validationrpartAapl <- data.frame('actual' = testaapl$label, predictrpartaapl)
+accuracyrparAaapl <- nrow(subset(validationrpartaapl, actual == predictrpartaapl)) / nrow(validationrpartaapl)
+cat("Accuracy Regression  and Decision Trees Model:",
+    accuracyrpartaapl)
+```
+```{r}
+#Plotting the Model
+plot<-rpart.plot(rpartModelAapl,extra=2,under=TRUE)
+```
+```{r}
+#Running the function for the column pricing average
+resultsAapl<-trainTS(aapl$ave)
+```
+
+```{r}
+#Running the function for the column pricing average
+aaplTestTS <- aapl[c(50, 70, 90, 110, 130, 150, 170, 190, 210, 230, 250, 270, 290, 310), ]
+resultsAapl$classPred <- ifelse(resultsAapl$Actual - resultsAapl$Pred > 0, 'down', 'up')
+resultsAapl$classPred <- as.factor(resultsAapl$classPred)
+aaplTestTS$PredMarkt <- as.factor(aaplTestTS$PredMarkt)
+tableAapl <- cbind(resultsAapl, PredMarkt = aaplTestTS$PredMarkt)
+```
+```{r}
+#Confusion Matrix Stock Aapl
+confusionMatrixAapl<-table(Actual=tableAapl$PredMarkt,Prediction=tableAapl$classPred)
+confusionMatrixAapl
+```
+```{r}
+#Accuracy for predicted class "Market is going up or down" for the stock Microsoft
+accuracyAapl = sum(diag(confusionMatrixAapl) /  sum (rowSums(confusionMatrixAapl)))
+cat("Accuracy TS Class TESLA:", accuracyAapl)
+```
+
+This accuracy is low, approximately in 64% of the times that the model is going to decide if it should buy/sell big or buy/sell safe based on the prediction of the market for the next observation takes the correct decision. Taking in count that there are only 2 possible choices, randomly we have a 50% of chances to take the correct decision, so the prediction of Time Series Model only improves the Model in a 14% of accuracy
+
